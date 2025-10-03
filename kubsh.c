@@ -33,9 +33,11 @@ while(1){
 break;} 
    if(strcmp(input, "\\q")==0){
      printf("Sortir du programme par \\q\n");
-  printf("%s: command not found\n", input);
+      break;}
 if(strcmp(input, "echo")==0){
      printf("123\n");
+     break;}
+ printf("%s: command not found\n", input);
 }
    return 0;
 }

@@ -64,5 +64,30 @@ printf("$ ");
 }
 
 
+#include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+
+void get_partition_info(){
+FILE *fp;
+char buffer[1024];
+printf("fdisk -l/dev/sda\n");
+fp=popen("sudo fdisk -l/dev/sda 2>/dev/null","r");
+if(fp==NULL){
+printf("erreur lors de l'execurion de fdisk\n");
+fp=popen("sudo fdisk -l/dev/sda 2>/dev/null","r");
+if(fp==NULL){
+printf("erreur lors de l'execurion de fdisk\n");
+return;
+}
+
+while(fgets(buffer,sizeof(buffer),fp)!=NULL){
+printf(
+
+
+
+
+
+
 
 

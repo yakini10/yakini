@@ -148,8 +148,8 @@ continue;
 
      return 0;
 }
-Code pour l'exo 8 doit avoir des correction faite
-   #include<stdio.h>
+Code pour l'exo 8 
+#include<stdio.h>
 #include<stdlib.h>
 #include<stdbool.h>
 #include<string.h>
@@ -190,7 +190,7 @@ return;
 }
 printf("%s =\n",var_name);
 if(strchr(copy,':')){
-
+char*copy=strdup(value);
 char *token = strtok(copy,":");
 while(token){
 printf("-%s\n",token);
@@ -200,7 +200,7 @@ token= strtok(NULL,":");
 }
 free (copy);
 }
-void excute_command(char input){
+void excute_command(char *input){
 char*args[11];
 int i=0;
 char * token = strtok(input, " ");
@@ -245,11 +245,6 @@ continue;
 
       if(!strcmp(input, "\\q")){
          break;
- }
-      add_history(input);
-
-      if(!strcmp(input, "\\q")){
-         break;
       } else if(strncmp(input, "debug ",5)== 0){
          debug(input);
       } else if (strncmp(input,"\\e $",4)==0){
@@ -264,8 +259,6 @@ continue;
 
      return 0;
 }
-
-
 
 
 

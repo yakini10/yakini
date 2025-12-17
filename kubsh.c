@@ -266,6 +266,26 @@ On avait commence les commandes  maisons du coup je dois le terminer a la  maiso
 
 
 
+# 1. Installer les dépendances
+sudo apt-get update
+sudo apt-get install -y libreadline-dev
 
+# 2. Compiler
+make
+
+# 3. Tester toutes les fonctionnalités
+make run
+
+# Tests à faire dans kubsh:
+# 1. Tapez "hello" -> doit afficher "hello" (Point 1)
+# 2. Ctrl+D pour quitter (Point 2)
+# 3. Tapez "\q" pour quitter (Point 3)
+# 4. Tapez plusieurs commandes, elles doivent être sauvegardées (Point 4)
+# 5. Tapez "echo "test"" -> doit afficher "test" (Point 5)
+# 6. Tapez "cd /tmp" puis "pwd" -> doit fonctionner (Point 6)
+# 7. Tapez "\e $PATH" -> doit afficher PATH en liste (Point 7)
+# 8. Tapez "ls" -> doit exécuter ls (Point 8)
+# 9. Dans un autre terminal: "kill -HUP <pid_kubsh>" -> doit afficher "Configuration reloaded" (Point 9)
+# 10. Tapez "\l /dev/sda" -> doit lister les partitions (Point 10)
 
 

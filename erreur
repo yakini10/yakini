@@ -1,0 +1,4 @@
+kubsh.c:9:9: fatal error: readline/readline.h: Aucun fichier ou dossier de ce nom
+    9 | #include<readline/readline.h>
+      |         ^~~~~~~~~~~~~~~~~~~~~
+compilation terminated.

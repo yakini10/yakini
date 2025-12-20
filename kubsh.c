@@ -518,6 +518,368 @@ sudo apt-get install -y libreadline-dev
 # 2. Compiler
 make
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+La derniere mise a jour
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <errno.h>
+#include <pwd.h>
+
+#define MAX_INPUT 1024
+#define MAX_ARGS 64
+#define HISTORY_SIZE 100
+#define HISTORY_FILE ".kubsh_history"
+
+// Structure pour l'historique
+typedef struct {
+    char *commands[HISTORY_SIZE];
+    int count;
+    int pos;
+} History;
+
+// Variables globales
+static History history = {0};
+static volatile sig_atomic_t reload_config = 0;
+
+// Prototypes
+void handle_sighup(int sig);
+void history_init(void);
+void history_add(const char *cmd);
+void history_save(void);
+void history_load(void);
+void history_print(void);
+int is_builtin(const char *cmd);
+int execute_builtin(char **args);
+int execute_external(char **args);
+char* find_in_path(const char *cmd);
+
+// Gestion des signaux
+void handle_sighup(int sig) {
+    (void)sig;
+    reload_config = 1;
+    printf("\nConfiguration reloaded\n");
+}
+
+// Historique
+void history_init(void) {
+    for (int i = 0; i < HISTORY_SIZE; i++) {
+        history.commands[i] = NULL;
+    }
+    history.count = 0;
+    history.pos = 0;
+}
+
+void history_add(const char *cmd) {
+    if (!cmd || strlen(cmd) == 0) return;
+    
+    if (history.commands[history.pos]) {
+        free(history.commands[history.pos]);
+    }
+    
+    history.commands[history.pos] = strdup(cmd);
+    history.pos = (history.pos + 1) % HISTORY_SIZE;
+    
+    if (history.count < HISTORY_SIZE) {
+        history.count++;
+    }
+}
+
+void history_save(void) {
+    char *home = getenv("HOME");
+    if (!home) return;
+    
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s", home, HISTORY_FILE);
+    
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    
+    for (int i = 0; i < history.count; i++) {
+        int idx = (history.pos - history.count + i + HISTORY_SIZE) % HISTORY_SIZE;
+        if (history.commands[idx]) {
+            fprintf(f, "%s\n", history.commands[idx]);
+        }
+    }
+    
+    fclose(f);
+}
+
+void history_load(void) {
+    char *home = getenv("HOME");
+    if (!home) return;
+    
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s", home, HISTORY_FILE);
+    
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    
+    char line[MAX_INPUT];
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\n")] = 0;
+        history_add(line);
+    }
+    
+    fclose(f);
+}
+
+void history_print(void) {
+    printf("Command history:\n");
+    for (int i = 0; i < history.count; i++) {
+        int idx = (history.pos - history.count + i + HISTORY_SIZE) % HISTORY_SIZE;
+        printf("%3d: %s\n", i + 1, history.commands[idx]);
+    }
+}
+
+// Commandes intégrées
+int cmd_echo(char **args) {
+    for (int i = 1; args[i]; i++) {
+        printf("%s", args[i]);
+        if (args[i + 1]) printf(" ");
+    }
+    printf("\n");
+    return 0;
+}
+
+int cmd_env(char **args) {
+    if (!args[1]) {
+        extern char **environ;
+        for (int i = 0; environ[i]; i++) {
+            printf("%s\n", environ[i]);
+        }
+    } else {
+        char *val = getenv(args[1]);
+        if (val) {
+            if (strchr(val, ':')) {
+                char *token = strtok(val, ":");
+                while (token) {
+                    printf("%s\n", token);
+                    token = strtok(NULL, ":");
+                }
+            } else {
+                printf("%s\n", val);
+            }
+        } else {
+            printf("Undefined variable: %s\n", args[1]);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int cmd_exec(char **args) {
+    if (!args[1]) {
+        fprintf(stderr, "Usage: exec <command>\n");
+        return 1;
+    }
+    
+    char *path = find_in_path(args[1]);
+    if (!path) {
+        fprintf(stderr, "Command not found: %s\n", args[1]);
+        return 1;
+    }
+    
+    pid_t pid = fork();
+    if (pid == 0) {
+        execv(path, &args[1]);
+        perror("execv");
+        free(path);
+        exit(1);
+    } else if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+        free(path);
+        return WEXITSTATUS(status);
+    } else {
+        perror("fork");
+        free(path);
+        return 1;
+    }
+}
+
+int cmd_disk_info(char **args) {
+    if (!args[1]) {
+        fprintf(stderr, "Usage: \\l <device>\n");
+        return 1;
+    }
+    
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "fdisk -l %s 2>/dev/null || lsblk %s", args[1], args[1]);
+    return system(cmd);
+}
+
+// Chercher dans PATH
+char* find_in_path(const char *cmd) {
+    if (strchr(cmd, '/')) {
+        if (access(cmd, X_OK) == 0) return strdup(cmd);
+        return NULL;
+    }
+    
+    char *path = getenv("PATH");
+    if (!path) return NULL;
+    
+    char *path_copy = strdup(path);
+    char *dir = strtok(path_copy, ":");
+    
+    while (dir) {
+        char full_path[512];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir, cmd);
+        
+        if (access(full_path, X_OK) == 0) {
+            free(path_copy);
+            return strdup(full_path);
+        }
+        
+        dir = strtok(NULL, ":");
+    }
+    
+    free(path_copy);
+    return NULL;
+}
+
+// Vérifier si commande intégrée
+int is_builtin(const char *cmd) {
+    const char *builtins[] = {
+        "echo", "\\e", "\\l", "\\h", "\\q", "\\vfs", NULL
+    };
+    
+    for (int i = 0; builtins[i]; i++) {
+        if (strcmp(cmd, builtins[i]) == 0) return 1;
+    }
+    
+    return 0;
+}
+
+// Exécuter commande intégrée
+int execute_builtin(char **args) {
+    if (!args[0]) return 1;
+    
+    if (strcmp(args[0], "echo") == 0) return cmd_echo(args);
+    if (strcmp(args[0], "\\e") == 0) return cmd_env(args);
+    if (strcmp(args[0], "\\l") == 0) return cmd_disk_info(args);
+    if (strcmp(args[0], "\\h") == 0) { history_print(); return 0; }
+    if (strcmp(args[0], "\\q") == 0) return -1; // Signal pour quitter
+    
+    // Pour \vfs, appeler la fonction du fichier vfs.c
+    if (strcmp(args[0], "\\vfs") == 0) {
+        // Fonction déclarée dans vfs.c
+        extern int vfs_command(char **args);
+        return vfs_command(args);
+    }
+    
+    return 1;
+}
+
+// Exécuter commande externe
+int execute_external(char **args) {
+    pid_t pid = fork();
+    
+    if (pid == 0) {
+        execvp(args[0], args);
+        perror("execvp");
+        exit(1);
+    } else if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+        return WEXITSTATUS(status);
+    } else {
+        perror("fork");
+        return 1;
+    }
+}
+
+// Parser l'entrée
+int parse_input(char *input, char **args) {
+    int i = 0;
+    char *token = strtok(input, " \t\n");
+    
+    while (token && i < MAX_ARGS - 1) {
+        args[i++] = token;
+        token = strtok(NULL, " \t\n");
+    }
+    
+    args[i] = NULL;
+    return i;
+}
+
+// Boucle principale
+void shell_loop(void) {
+    char input[MAX_INPUT];
+    char *args[MAX_ARGS];
+    
+    signal(SIGHUP, handle_sighup);
+    history_init();
+    history_load();
+    
+    // Créer ~/users
+    char *home = getenv("HOME");
+    if (home) {
+        char path[256];
+        snprintf(path, sizeof(path), "%s/users", home);
+        mkdir(path, 0755);
+    }
+    
+    printf("kubsh v1.0 - Type \\q to quit, \\h for history\n");
+    
+    while (1) {
+        if (reload_config) {
+            reload_config = 0;
+            // Recharger configuration si nécessaire
+        }
+        
+        printf("kubsh> ");
+        fflush(stdout);
+        
+        if (!fgets(input, sizeof(input), stdin)) {
+            printf("\n");
+            break;
+        }
+        
+        input[strcspn(input, "\n")] = 0;
+        
+        if (strlen(input) == 0) continue;
+        
+        history_add(input);
+        
+        int argc = parse_input(input, args);
+        if (argc == 0) continue;
+        
+        if (is_builtin(args[0])) {
+            int result = execute_builtin(args);
+            if (result == -1) break; // \q command
+        } else {
+            execute_external(args);
+        }
+    }
+    
+    history_save();
+}
+
+int main(void) {
+    shell_loop();
+    return 0;
+}
+
 # 3. Tester toutes les fonctionnalités
 make run
 

@@ -256,3 +256,147 @@ int delete_system_user(const char *username) {
 // === КОНЕЦ ВСТАВКИ ===
 
 static int users_mkdir(const char *path, mode_t mode) {
+
+derniere mise a jour aussi
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <pwd.h>
+#include <errno.h>
+
+#define VFS_BASE "users"
+
+// Créer répertoire utilisateur
+static void create_user_dir(const char *username) {
+    char *home = getenv("HOME");
+    if (!home) return;
+    
+    struct passwd *pw = getpwnam(username);
+    if (!pw) return;
+    
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%s/%s", home, VFS_BASE, username);
+    
+    mkdir(dir_path, 0755);
+    
+    // Fichier id
+    char id_path[512];
+    snprintf(id_path, sizeof(id_path), "%s/id", dir_path);
+    FILE *f = fopen(id_path, "w");
+    if (f) {
+        fprintf(f, "%d\n", pw->pw_uid);
+        fclose(f);
+    }
+    
+    // Fichier home
+    char home_path[512];
+    snprintf(home_path, sizeof(home_path), "%s/home", dir_path);
+    f = fopen(home_path, "w");
+    if (f) {
+        fprintf(f, "%s\n", pw->pw_dir);
+        fclose(f);
+    }
+    
+    // Fichier shell
+    char shell_path[512];
+    snprintf(shell_path, sizeof(shell_path), "%s/shell", dir_path);
+    f = fopen(shell_path, "w");
+    if (f) {
+        fprintf(f, "%s\n", pw->pw_shell);
+        fclose(f);
+    }
+}
+
+// Initialiser VFS
+int vfs_init(void) {
+    char *home = getenv("HOME");
+    if (!home) return -1;
+    
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", home, VFS_BASE);
+    
+    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+        perror("mkdir");
+        return -1;
+    }
+    
+    // Créer répertoires pour utilisateurs existants
+    struct passwd *pw;
+    setpwent();
+    while ((pw = getpwent()) != NULL) {
+        create_user_dir(pw->pw_name);
+    }
+    endpwent();
+    
+    return 0;
+}
+
+// Gérer commandes VFS
+int vfs_command(char **args) {
+    if (!args[1]) {
+        // Lister utilisateurs
+        char *home = getenv("HOME");
+        if (!home) return -1;
+        
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s", home, VFS_BASE);
+        
+        DIR *dir = opendir(path);
+        if (!dir) return -1;
+        
+        printf("Users in VFS:\n");
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (entry->d_name[0] == '.') continue;
+            
+            char user_path[512];
+            snprintf(user_path, sizeof(user_path), "%s/%s", path, entry->d_name);
+            
+            struct stat st;
+            if (stat(user_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+                printf("  %s\n", entry->d_name);
+            }
+        }
+        closedir(dir);
+        return 0;
+    }
+    
+    if (strcmp(args[1], "add") == 0 && args[2]) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "sudo adduser %s", args[2]);
+        int ret = system(cmd);
+        
+        if (ret == 0) {
+            create_user_dir(args[2]);
+            printf("User %s added\n", args[2]);
+        }
+        return ret;
+    }
+    
+    if (strcmp(args[1], "remove") == 0 && args[2]) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "sudo userdel %s", args[2]);
+        int ret = system(cmd);
+        
+        if (ret == 0) {
+            char *home = getenv("HOME");
+            if (home) {
+                char path[512];
+                snprintf(path, sizeof(path), "%s/%s/%s", home, VFS_BASE, args[2]);
+                char rm_cmd[512];
+                snprintf(rm_cmd, sizeof(rm_cmd), "rm -rf %s", path);
+                system(rm_cmd);
+            }
+            printf("User %s removed\n", args[2]);
+        }
+        return ret;
+    }
+    
+    fprintf(stderr, "Usage: \\vfs [add <user>|remove <user>]\n");
+    return 1;
+}

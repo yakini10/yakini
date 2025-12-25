@@ -400,3 +400,447 @@ int vfs_command(char **args) {
     fprintf(stderr, "Usage: \\vfs [add <user>|remove <user>]\n");
     return 1;
 }
+
+
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <pwd.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/inotify.h>
+
+#include <readline/readline.h>
+#include <readline/history.h>
+
+#define HISTORY_FILE ".kubsh_history"
+#define VFS_USERS_DIR "users"
+#define EVENT_SIZE (sizeof(struct inotify_event))
+#define EVENT_BUF_LEN (1024 * (EVENT_SIZE + 16))
+#define MAX_PATH 512
+
+sig_atomic_t signal_received = 0;
+static char vfs_base_path[MAX_PATH];
+static int inotify_fd = -1;
+static int watch_fd = -1;
+
+// ============ FONCTIONS VFS ============
+
+static void create_user_files(const char *username, struct passwd *pwd) {
+char user_dir[MAX_PATH];
+snprintf(user_dir, sizeof(user_dir), "%s/%s", vfs_base_path, username);
+
+if (mkdir(user_dir, 0755) != 0 && errno != EEXIST) {
+perror("mkdir user_dir");
+return;
+}
+
+char id_file[MAX_PATH];
+snprintf(id_file, sizeof(id_file), "%s/id", user_dir);
+FILE *f = fopen(id_file, "w");
+if (f) {
+fprintf(f, "%d\n", pwd->pw_uid);
+fclose(f);
+}
+
+char home_file[MAX_PATH];
+snprintf(home_file, sizeof(home_file), "%s/home", user_dir);
+f = fopen(home_file, "w");
+if (f) {
+fprintf(f, "%s\n", pwd->pw_dir);
+fclose(f);
+}
+
+char shell_file[MAX_PATH];
+snprintf(shell_file, sizeof(shell_file), "%s/shell", user_dir);
+f = fopen(shell_file, "w");
+if (f) {
+fprintf(f, "%s\n", pwd->pw_shell);
+fclose(f);
+}
+
+printf("[VFS] User %s synchronized\n", username);
+}
+
+static void remove_user_files(const char *username) {
+char user_dir[MAX_PATH];
+snprintf(user_dir, sizeof(user_dir), "%s/%s", vfs_base_path, username);
+
+char id_file[MAX_PATH], home_file[MAX_PATH], shell_file[MAX_PATH];
+snprintf(id_file, sizeof(id_file), "%s/id", user_dir);
+snprintf(home_file, sizeof(home_file), "%s/home", user_dir);
+snprintf(shell_file, sizeof(shell_file), "%s/shell", user_dir);
+
+unlink(id_file);
+unlink(home_file);
+unlink(shell_file);
+
+if (rmdir(user_dir) != 0) {
+perror("rmdir user_dir");
+} else {
+printf("[VFS] User %s removed\n", username);
+}
+}
+
+static void system_add_user(const char *username) {
+char command[MAX_PATH * 2];
+
+struct passwd *pwd = getpwnam(username);
+if (pwd != NULL) {
+printf("[VFS] User %s already exists\n", username);
+return;
+}
+
+snprintf(command, sizeof(command), 
+         "sudo adduser --disabled-password --gecos '' %s 2>/dev/null", 
+         username);
+
+int result = system(command);
+if (result == 0) {
+printf("[VFS] User %s created\n", username);
+
+pwd = getpwnam(username);
+if (pwd) {
+create_user_files(username, pwd);
+}
+} else {
+fprintf(stderr, "[VFS] Failed to create user %s\n", username);
+}
+}
+
+static void system_del_user(const char *username) {
+char command[MAX_PATH * 2];
+
+struct passwd *pwd = getpwnam(username);
+if (pwd == NULL) {
+printf("[VFS] User %s doesn't exist\n", username);
+return;
+}
+
+snprintf(command, sizeof(command), "sudo userdel -r %s 2>/dev/null", username);
+
+int result = system(command);
+if (result == 0) {
+printf("[VFS] User %s removed\n", username);
+} else {
+fprintf(stderr, "[VFS] Failed to remove user %s\n", username);
+}
+}
+
+static int init_inotify(void) {
+inotify_fd = inotify_init();
+if (inotify_fd < 0) {
+perror("inotify_init");
+return -1;
+}
+
+watch_fd = inotify_add_watch(inotify_fd, vfs_base_path, 
+                             IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM);
+if (watch_fd < 0) {
+perror("inotify_add_watch");
+close(inotify_fd);
+inotify_fd = -1;
+return -1;
+}
+
+return 0;
+}
+
+void vfs_init(void) {
+char *home = getenv("HOME");
+if (!home) {
+fprintf(stderr, "[VFS] HOME not set\n");
+return;
+}
+
+snprintf(vfs_base_path, sizeof(vfs_base_path), "%s/%s", home, VFS_USERS_DIR);
+
+printf("[VFS] Creating: %s\n", vfs_base_path);
+
+if (mkdir(vfs_base_path, 0755) != 0 && errno != EEXIST) {
+perror("mkdir vfs_base_path");
+return;
+}
+
+if (init_inotify() < 0) {
+fprintf(stderr, "[VFS] Failed inotify\n");
+return;
+}
+
+struct passwd *pwd;
+setpwent();
+
+while ((pwd = getpwent()) != NULL) {
+if (pwd->pw_uid >= 1000) {
+create_user_files(pwd->pw_name, pwd);
+}
+}
+
+endpwent();
+
+printf("[VFS] Ready\n");
+}
+
+void vfs_check_events(void) {
+if (inotify_fd < 0) {
+return;
+}
+
+fd_set read_fds;
+struct timeval timeout;
+
+FD_ZERO(&read_fds);
+FD_SET(inotify_fd, &read_fds);
+
+timeout.tv_sec = 0;
+timeout.tv_usec = 0;
+
+int ret = select(inotify_fd + 1, &read_fds, NULL, NULL, &timeout);
+if (ret > 0 && FD_ISSET(inotify_fd, &read_fds)) {
+char buffer[EVENT_BUF_LEN];
+int length = read(inotify_fd, buffer, EVENT_BUF_LEN);
+
+if (length < 0) {
+perror("read inotify");
+return;
+}
+
+int i = 0;
+while (i < length) {
+struct inotify_event *event = (struct inotify_event *)&buffer[i];
+
+if (event->len > 0) {
+if (event->mask & IN_ISDIR) {
+if (event->mask & (IN_CREATE | IN_MOVED_TO)) {
+printf("[VFS] New: %s\n", event->name);
+system_add_user(event->name);
+}
+else if (event->mask & (IN_DELETE | IN_MOVED_FROM)) {
+printf("[VFS] Removed: %s\n", event->name);
+system_del_user(event->name);
+}
+}
+}
+
+i += EVENT_SIZE + event->len;
+}
+}
+}
+
+void vfs_cleanup(void) {
+DIR *dir;
+struct dirent *entry;
+
+dir = opendir(vfs_base_path);
+if (!dir) {
+perror("opendir vfs_base_path");
+return;
+}
+
+while ((entry = readdir(dir)) != NULL) {
+if (entry->d_type == DT_DIR && 
+    strcmp(entry->d_name, ".") != 0 && 
+    strcmp(entry->d_name, "..") != 0) {
+    
+    remove_user_files(entry->d_name);
+}
+}
+
+closedir(dir);
+
+if (inotify_fd >= 0) {
+if (watch_fd >= 0) {
+inotify_rm_watch(inotify_fd, watch_fd);
+}
+close(inotify_fd);
+}
+
+printf("[VFS] Cleanup done\n");
+}
+
+// ============ FONCTIONS SHELL ============
+
+void sig_handler(int signum){
+if (signum == SIGHUP) {
+printf("Configuration reloaded\n");
+}
+signal_received = signum;
+}
+
+void debug(char *line){
+printf("%s\n",line);
+}
+
+void echo_command(char *input){
+char *text = input + 5;
+if(text[0]=='"'&&text[strlen(text)-1]=='"'){
+text[strlen(text)-1]='\0';
+text++;
+}
+printf("%s\n",text);
+}
+
+void print_env_var(const char *var_name){
+if(var_name==NULL||strlen(var_name)==0){
+printf("Usage: \\e $VARNAME\n");
+return;
+}
+if(var_name[0]=='$')
+var_name++;
+
+const char *value=getenv(var_name);
+if(value==NULL){
+printf("Variable'%s'not found.\n",var_name);
+return;
+}
+char*copy=strdup(value);
+if(!copy){
+perror("strdup");
+return;
+}
+printf("%s =\n",var_name);
+if(strchr(copy,':')){
+char*token=strtok(copy,":");
+while(token){
+printf("-%s\n",token);
+token=strtok(NULL,":");
+}
+}else{printf("%s\n",copy);}
+free(copy);
+}
+
+void list_partitions(const char *device){
+char command[512];
+if(device&&strlen(device)>0){
+snprintf(command,sizeof(command),"sudo fdisk -l %s 2>/dev/null||sudo lsblk %s",device,device);
+}else{
+snprintf(command,sizeof(command),"sudo lsblk");
+}
+system(command);
+}
+
+void execute_command(char *input){
+char*args[64];
+int i=0;
+char*copy=strdup(input);
+char*token=strtok(copy," ");
+while(token!=NULL&&i<63){
+args[i++]=token;
+token=strtok(NULL," ");
+}
+args[i]=NULL;
+
+if(args[0]==NULL){
+free(copy);
+return;
+}
+
+if(strcmp(args[0],"cd")==0){
+if(args[1]){
+if(chdir(args[1])!=0){
+perror("cd");
+}
+}else{
+chdir(getenv("HOME"));
+}
+free(copy);
+return;
+}
+
+pid_t pid=fork();
+if(pid==0){
+execvp(args[0],args);
+perror(args[0]);
+exit(EXIT_FAILURE);
+}else if(pid>0){
+int status;
+waitpid(pid,&status,0);
+}else{
+perror("fork");
+}
+free(copy);
+}
+
+// ============ MAIN ============
+
+int main()
+{
+signal(SIGHUP,sig_handler);
+signal(SIGINT,SIG_IGN);
+
+char*home=getenv("HOME");
+char history_path[512];
+snprintf(history_path,sizeof(history_path),"%s/%s",home,HISTORY_FILE);
+
+FILE*test=fopen(history_path,"r");
+if(test){
+fclose(test);
+read_history(history_path);
+}
+
+vfs_init();
+
+printf("Kubsh started.\n");
+char*input;
+
+while(1){
+vfs_check_events();
+
+input=readline("kubsh> ");
+
+if(signal_received){
+signal_received=0;
+if(input)free(input);
+continue;
+}
+
+if(input==NULL){
+printf("\n");
+break;
+}
+
+if(strlen(input)==0){
+free(input);
+continue;
+}
+
+add_history(input);
+
+if(!strcmp(input,"\\q")){
+free(input);
+break;
+}
+else if(strncmp(input,"debug ",6)==0){
+debug(input);
+}
+else if(strncmp(input,"echo ",5)==0){
+echo_command(input);
+}
+else if(strncmp(input,"\\e $",4)==0){
+print_env_var(input+4);
+}
+else if(strncmp(input,"\\l",2)==0){
+char*device=input+2;
+while(*device==' ')device++;
+list_partitions(device);
+}
+else{
+execute_command(input);
+}
+free(input);
+}
+
+write_history(history_path);
+vfs_cleanup();
+printf("Goodbye!\n");
+return 0;
+}

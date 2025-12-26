@@ -9,3 +9,5 @@ permission denied while trying to connect to the Docker daemon socket at unix://
 
 yakini@yakini-VirtualBox:~$ docker exec -it vibrant_goldberg bash
 Error response from daemon: No such container: vibrant_goldberg
+
+CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES

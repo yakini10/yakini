@@ -2,3 +2,6 @@ kubsh.c:9:9: fatal error: readline/readline.h: Aucun fichier ou dossier de ce no
     9 | #include<readline/readline.h>
       |         ^~~~~~~~~~~~~~~~~~~~~
 compilation terminated.
+
+
+permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.50/containers/json": dial unix /var/run/docker.sock: connect: permission denied

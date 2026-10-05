@@ -1,0 +1,348 @@
+// Contact.kt
+data class Contact(
+    val lastName: String = "",
+    val firstName: String = "",
+    val middleName: String = "",
+    val phone: String = ""
+) {
+    fun displayName(): String {
+        val initials = listOf(firstName, middleName)
+            .filter { it.isNotBlank() }
+            .map { it.first().uppercaseChar() + "." }
+            .joinToString(" ")
+        return if (initials.isBlank()) lastName else "$lastName $initials"
+    }
+}
+
+
+// ContactViewModel.kt
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.ViewModel
+
+class ContactViewModel : ViewModel() {
+
+    companion object {
+        // Instance partagée entre les 3 activités
+        val instance = ContactViewModel()
+    }
+
+    private val _contacts = MutableLiveData<MutableList<Contact>>(mutableListOf())
+    val contacts: LiveData<MutableList<Contact>> = _contacts
+
+    private val _currentIndex = MutableLiveData(0)
+    val currentIndex: LiveData<Int> = _currentIndex
+
+    fun current(): Contact? =
+        _contacts.value?.getOrNull(_currentIndex.value ?: 0)
+
+    fun next() {
+        val list = _contacts.value ?: return
+        if (list.isEmpty()) return
+        _currentIndex.value = ((_currentIndex.value ?: 0) + 1) % list.size
+    }
+
+    fun previous() {
+        val list = _contacts.value ?: return
+        if (list.isEmpty()) return
+        _currentIndex.value = ((_currentIndex.value ?: 0) - 1 + list.size) % list.size
+    }
+
+    fun add(contact: Contact) {
+        val list = _contacts.value ?: mutableListOf()
+        list.add(contact)
+        _contacts.value = list
+        _currentIndex.value = list.size - 1
+    }
+
+    fun update(contact: Contact) {
+        val list = _contacts.value ?: return
+        val idx = _currentIndex.value ?: return
+        if (idx in list.indices) {
+            list[idx] = contact
+            _contacts.value = list
+        }
+    }
+}
+
+
+//activity_main.xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="24dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <ImageView
+            android:id="@+id/btnPrev"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_left"
+            android:contentDescription="Précédent"/>
+
+        <TextView
+            android:id="@+id/tvContact"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Нет данных"
+            android:textSize="20sp"/>
+
+        <ImageView
+            android:id="@+id/btnNext"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_right"
+            android:contentDescription="Suivant"/>
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/btnAdd"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="40dp"
+        android:backgroundTint="#4CAF50"
+        android:text="Добавить"/>
+
+    <Button
+        android:id="@+id/btnEdit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:backgroundTint="#FF9800"
+        android:text="Изменить"/>
+</LinearLayout>
+
+
+
+//activity_edit.xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="изменение значений"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="24dp"/>
+
+    <EditText android:id="@+id/etLastName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Фамилия"/>
+
+    <EditText android:id="@+id/etFirstName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Имя"/>
+
+    <EditText android:id="@+id/etMiddleName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Отчество"/>
+
+    <EditText android:id="@+id/etPhone"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Телефон"
+        android:inputType="phone"/>
+
+    <Button
+        android:id="@+id/btnSave"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="Сохранить"/>
+</LinearLayout>
+
+
+//MainActivity
+import android.content.Intent
+import android.os.Bundle
+import android.widget.Button
+import android.widget.ImageView
+import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+
+class MainActivity : AppCompatActivity() {
+
+    private val vm = ContactViewModel.instance
+    private lateinit var tvContact: TextView
+
+    // Un seul launcher pour les 2 activités (add + edit)
+    private val launcher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { refresh() }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        tvContact = findViewById(R.id.tvContact)
+
+        findViewById<ImageView>(R.id.btnPrev).setOnClickListener {
+            vm.previous(); refresh()
+        }
+        findViewById<ImageView>(R.id.btnNext).setOnClickListener {
+            vm.next(); refresh()
+        }
+
+        // Bouton "Добавить" → AddActivity
+        findViewById<Button>(R.id.btnAdd).setOnClickListener {
+            launcher.launch(Intent(this, AddActivity::class.java))
+        }
+
+        // Bouton "Изменить" → EditActivity
+        findViewById<Button>(R.id.btnEdit).setOnClickListener {
+            if (vm.current() == null) return@setOnClickListener
+            launcher.launch(Intent(this, EditActivity::class.java))
+        }
+
+        refresh()
+    }
+
+    private fun refresh() {
+        val c = vm.current()
+        tvContact.text = c?.displayName() ?: "Нет данных"
+    }
+}
+
+
+//AddActivity
+import android.os.Bundle
+import android.widget.Button
+import android.widget.EditText
+import androidx.appcompat.app.AppCompatActivity
+
+class AddActivity : AppCompatActivity() {
+
+    private val vm = ContactViewModel.instance
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_add)
+
+        val etLast = findViewById<EditText>(R.id.etLastName)
+        val etFirst = findViewById<EditText>(R.id.etFirstName)
+        val etMiddle = findViewById<EditText>(R.id.etMiddleName)
+        val etPhone = findViewById<EditText>(R.id.etPhone)
+
+        findViewById<Button>(R.id.btnSave).setOnClickListener {
+            val contact = Contact(
+                lastName = etLast.text.toString().trim(),
+                firstName = etFirst.text.toString().trim(),
+                middleName = etMiddle.text.toString().trim(),
+                phone = etPhone.text.toString().trim()
+            )
+            if (contact.lastName.isBlank() && contact.firstName.isBlank()) {
+                // validation minimale
+                etLast.error = "Введите фамилию"
+                return@setOnClickListener
+            }
+            vm.add(contact)
+            finish() // retour à MainActivity
+        }
+    }
+}
+
+
+//EditActivity
+import android.os.Bundle
+import android.widget.Button
+import android.widget.EditText
+import androidx.appcompat.app.AppCompatActivity
+
+class EditActivity : AppCompatActivity() {
+
+    private val vm = ContactViewModel.instance
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_edit)
+
+        val etLast = findViewById<EditText>(R.id.etLastName)
+        val etFirst = findViewById<EditText>(R.id.etFirstName)
+        val etMiddle = findViewById<EditText>(R.id.etMiddleName)
+        val etPhone = findViewById<EditText>(R.id.etPhone)
+
+        // Pré-remplir avec le contact courant
+        vm.current()?.let { c ->
+            etLast.setText(c.lastName)
+            etFirst.setText(c.firstName)
+            etMiddle.setText(c.middleName)
+            etPhone.setText(c.phone)
+        }
+
+        findViewById<Button>(R.id.btnSave).setOnClickListener {
+            val contact = Contact(
+                lastName = etLast.text.toString().trim(),
+                firstName = etFirst.text.toString().trim(),
+                middleName = etMiddle.text.toString().trim(),
+                phone = etPhone.text.toString().trim()
+            )
+            vm.update(contact)
+            finish() // retour à MainActivity
+        }
+    }
+}
+
+
+
+ //AndroidManifest.xml
+<application ...>
+    <activity android:name=".MainActivity" android:exported="true">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.LAUNCHER"/>
+        </intent-filter>
+    </activity>
+    <activity android:name=".AddActivity" android:exported="false"/>
+    <activity android:name=".EditActivity" android:exported="false"/>
+</application>
+
+
+// build.gradle (module)
+android {
+    compileSdk 34
+    defaultConfig {
+        minSdk 26          // conforme au sujet
+        targetSdk 34
+    }
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.6.1"
+    implementation "androidx.activity:activity-ktx:1.8.2"
+    implementation "androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0"
+    implementation "androidx.lifecycle:lifecycle-livedata-ktx:2.7.0"
+}
+
+
+
+
+
+
+
+
+class ContactsApp : Application() {
+    val viewModel: ContactViewModel by lazy {
+        ViewModelProvider.AndroidViewModelFactory
+            .getInstance(this)
+            .create(ContactViewModel::class.java)
+    }
+}
